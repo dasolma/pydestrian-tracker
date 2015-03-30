@@ -60,6 +60,9 @@ target/
 *.*~
 .*~
 
+#pychar
+src/.idea/
+
 # Project
 data/
 
