@@ -1,7 +1,3 @@
-from pybrain.tools.shortcuts import buildNetwork
-from pybrain.datasets import SupervisedDataSet
-from pybrain.supervised.trainers import BackpropTrainer
-from random import shuffle
 import load_data
 import network2, network
 import pickle
@@ -10,16 +6,22 @@ import annotations
 from os import listdir
 from os.path import isfile, join
 from os.path import basename
-from PIL import Image, ImageFilter, ImageDraw
+from PIL import Image,  ImageDraw
 import numpy as np
+from preprocess import *
+from lasagne import layers
+from lasagne.updates import nesterov_momentum
+from nolearn.lasagne import NeuralNet
 
 class Trainer():
 
-    def __init__(self, parameters={"n":0.01, "lmbda":5.0, "batch_size":10}, size=(70,134), version=0, net=None):
+    def __init__(self, parameters={"n":0.01, "lmbda":5.0, "batch_size":10, "momentum": 0.9},
+                 size=(96,160), version=0, net=None, preprocess=HOGPreprocess):
 
         self.parameters = parameters
         self.size= size
         self.version=version
+        self.preprocess = preprocess
 
         if not net is None:
             self.net = net
@@ -28,9 +30,14 @@ class Trainer():
 
     def load_dataset(self, data_file):
         (self.trainDS, self.testDS, self.validationDS) = load_data.load_data_wrapper(data_file)
+
+        self.file = basename(os.path.splitext(data_file)[0])
+
+        self.create_net()
+
+    def create_net(self):
         input_size = len(self.trainDS[0][0])
         output_size = len(self.trainDS[0][1])
-        self.file = basename(os.path.splitext(data_file)[0])
 
         if self.net is None:
             if self.version == 0:
@@ -38,6 +45,29 @@ class Trainer():
 
             if self.version == 1:
                 self.net = network2.Network((input_size,100, output_size), cost=network2.CrossEntropyCost)
+
+            if self.version == 3:
+                self.net = NeuralNet(
+                    layers=[  # three layers: one hidden layer
+                        ('input', layers.InputLayer),
+                        ('hidden', layers.DenseLayer),
+                        ('output', layers.DenseLayer),
+                        ],
+                    # layer parameters:
+                    input_shape=(None, input_size),  # 96x96 input pixels per batch
+                    hidden_num_units=500,  # number of units in hidden layer
+                    output_nonlinearity=None,  # output layer uses identity function
+                    output_num_units=output_size,  # 30 target values
+
+                    # optimization method:
+                    update=nesterov_momentum,
+                    update_learning_rate=self.parameters["n"],
+                    update_momentum=self.parameters["momentum"],
+
+                    regression=True,  # flag to indicate we're dealing with regression problem
+                    max_epochs=1000,  # we want to train this many epochs
+                    verbose=1,
+                    )
 
 
 
@@ -59,6 +89,18 @@ class Trainer():
                          lmbda = self.parameters["lmbda"],
                          evaluation_data=self.testDS[:sizes[1]],
                          monitor_evaluation_accuracy=True)
+
+        if self.version == 3:
+            X1, y1 = zip(*self.trainDS)
+            X2, y2 = zip(*self.testDS)
+            y2 = [load_data.vectorized_result(y) for y in y2]
+            X, y = X1 + X2, y1 + tuple(y2)
+            X = np.reshape(X, (len(X), len(X[0])))
+            y = np.reshape(y, (len(y), len(y[0])))
+            X = X.astype(np.float32)
+            y = y.astype(np.float32)
+            self.net.fit(X, y)
+
 
         right = self.net.evaluate(self.testDS)
         error = (float(len(self.testDS))/right) - 1
@@ -84,43 +126,37 @@ class Trainer():
         count = 0;
         datas = []
         for file in files:
-            print file
+
             src = Image.open(join(path_pos, file))
-            imsize = src.size
-            src.thumbnail((imsize[0]/2, imsize[1]/2), Image.ANTIALIAS)
             imsize = src.size
             draw = ImageDraw.Draw(src)
             im = src.convert('L')
-
+            print file
 
             for x in range(0, imsize[0]-self.size[0], offsetx) + list([imsize[0]-self.size[0]]):
 
                 for y in range(0, imsize[1]-self.size[1], offsety) + list([imsize[1]-self.size[1]]):
-                    rect  =(x,y, x+self.size[0], y+self.size[1])
-                    pixels = list(im.crop(rect).getdata())
+
+                    rect  =(y, y+self.size[1], x, x+self.size[0])
+
 
                     #preprocessing
-                    imr = Image.new("L", self.size)
-                    imr.putdata(pixels)
-                    #imr = imr.filter(ImageFilter.FIND_EDGES)
-                    #threshold = 50
-                    #imr = imr.point(lambda p: p > threshold and 255)
+                    data = self.preprocess.processCrop(join(path_pos, file), rect)
 
-                    #normalization [0,1]
-                    data = [float(p)/255 for p in imr.getdata()]
-
-                    #numpy array
-                    data = np.reshape(data, (len(data), 1))
+                    data  = np.reshape(data, (len(data), 1))
 
                     rv = self.net.feedforward(data)
                     r =  np.argmax(rv)
 
+
                     #
-                    if  r == 1:
+                    if  r == 1 and rv[r] > 0.95:
+                        print rv[r]
                         #load_data.show_image(data, size)
                         datas.append(data)
-                        print (x,y,rv, r)
+                        print (x,y,rv[r])
                         #print float(rv[r])
+                        rect  =(x, y, x+self.size[0], y+self.size[1])
                         draw.rectangle(rect, outline=(255,0,0))
 
 
@@ -150,6 +186,15 @@ class Trainer():
     def evalutate(self):
         print "Positives: %d / %d"%(self.net.evaluate(self.pos()), len(self.pos()))
         print "Negatives: %d / %d"%(self.net.evaluate(self.neg()), len(self.neg()))
+
+    def copy(self, trainer):
+        self.net = trainer.net
+        self.trainDS = trainer.trainDS
+        self.testDS = trainer.testDS
+        self.size = trainer.size
+        self.parameters = trainer.parameters
+        self.preprocess = trainer.preprocess
+        self.version = trainer.version
 
 
 
