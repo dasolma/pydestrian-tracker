@@ -36,7 +36,7 @@ class HOGPreprocess:
             HOGPreprocess.lastfile = file
 
         im = HOGPreprocess.lastIm
-        im = im[rect[0]:rect[1], rect[2]:rect[3]]
+        im = im[rect[2]:rect[3],rect[0]:rect[1]]
         image = color.rgb2gray(im)
         return HOGPreprocess.getHOG(image)
 
@@ -64,4 +64,26 @@ class HOGPreprocess:
         plt.show()
         '''
 
+class GrayPreprocess:
 
+    lastfile = None
+    lastIm = None
+
+    @staticmethod
+    def process(file):
+        im = skimage.io.imread(file)
+        image = color.rgb2gray(im)
+        return image.ravel()
+
+
+
+    @staticmethod
+    def processCrop(file, rect):
+        if file != HOGPreprocess.lastfile:
+            GrayPreprocess.lastIm = skimage.io.imread(file)
+            GrayPreprocess.lastfile = file
+
+        im = GrayPreprocess.lastIm
+        im = im[rect[0]:rect[1], rect[2]:rect[3]]
+        image = color.rgb2gray(im)
+        return image.ravel()
