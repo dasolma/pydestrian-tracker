@@ -1,44 +1,51 @@
-from PIL import Image
-import pickle
-import random
-from os import listdir
-from os.path import isfile, join
-from PIL import Image, ImageFilter
-import matplotlib.pyplot as plt
 from skimage.feature import hog
 from skimage import data, color, exposure
+from skimage.transform import resize
 import skimage
-import threading
-import time
-import numpy
-import sys
 
 
 class HOGPreprocess:
 
     lastfile = None
     lastIm = None
+    hog = None
 
     @staticmethod
     def process(file):
         im = skimage.io.imread(file)
         image = color.rgb2gray(im)
-        lastfile = file
-        lastIm = im
-        return HOGPreprocess.getHOG(image)
+        HOGPreprocess.lastfile = file
+        HOGPreprocess.lastIm = im
+        HOGPreprocess.hog = HOGPreprocess.getHOG(image)
+        return HOGPreprocess.hog.ravel()
 
 
 
     @staticmethod
-    def processCrop(file, rect):
+    def processCrop(file, rect, newsize=None):
         if file != HOGPreprocess.lastfile:
-            HOGPreprocess.lastIm = skimage.io.imread(file)
             HOGPreprocess.lastfile = file
+            HOGPreprocess.lastIm = skimage.io.imread(file)
+            HOGPreprocess.lastIm = color.rgb2gray(HOGPreprocess.lastIm)
+            HOGPreprocess.hog = HOGPreprocess.getHOG(HOGPreprocess.lastIm)
 
-        im = HOGPreprocess.lastIm
+
+        im = HOGPreprocess.hog
         im = im[rect[2]:rect[3],rect[0]:rect[1]]
-        image = color.rgb2gray(im)
-        return HOGPreprocess.getHOG(image)
+        #image = color.rgb2gray(im)
+
+        if newsize != None:
+            #print "resizing 2"
+            #im = HOGPreprocess.lastIm
+            #im = color.rgb2gray(im)
+            #im = im[rect[2]:rect[3],rect[0]:rect[1]]
+            im   \
+
+                = resize(im, (newsize[1], newsize[0]))
+            #return HOGPreprocess.getHOG(im).ravel()
+
+
+        return im.ravel()
 
 
     @staticmethod
@@ -46,7 +53,8 @@ class HOGPreprocess:
         fd, hog_image = hog(image, orientations=8, pixels_per_cell=(4, 4),
                     cells_per_block=(1, 1), visualise=True)
 
-        return hog_image.ravel()
+        print "hog"
+        return hog_image
 
         '''
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 4))
@@ -84,6 +92,10 @@ class GrayPreprocess:
             GrayPreprocess.lastfile = file
 
         im = GrayPreprocess.lastIm
-        im = im[rect[0]:rect[1], rect[2]:rect[3]]
+        im = im[rect[2]:rect[3], rect[0]:rect[1]]
         image = color.rgb2gray(im)
         return image.ravel()
+
+
+file = '../data/raw/INRIAPerson/Test/pos/crop001512.png'
+rect = (400,800,200,800)

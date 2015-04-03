@@ -12,10 +12,11 @@ from preprocess import *
 from lasagne import layers
 from lasagne.updates import nesterov_momentum
 from nolearn.lasagne import NeuralNet
+from skimage.transform import resize
 
 class Trainer():
 
-    def __init__(self, parameters={"n":0.01, "lmbda":5.0, "batch_size":10, "momentum": 0.9},
+    def __init__(self, parameters={"n":0.01, "lmbda":5.0, "batch_size":10, "momentum": 0.9, "epochs":20},
                  size=(96,160), version=0, net=None, preprocess=HOGPreprocess):
 
         self.parameters = parameters
@@ -36,8 +37,10 @@ class Trainer():
         self.create_net()
 
     def create_net(self):
-        input_size = len(self.trainDS[0][0])
-        output_size = len(self.trainDS[0][1])
+        #input_size = len(self.trainDS[0][0])
+        #output_size = len(self.trainDS[0][1])
+        input_size = self.size[0] * self.size[1]
+        output_size = 2
 
         if self.net is None:
             if self.version == 0:
@@ -65,7 +68,7 @@ class Trainer():
                     update_momentum=self.parameters["momentum"],
 
                     regression=True,  # flag to indicate we're dealing with regression problem
-                    max_epochs=1000,  # we want to train this many epochs
+                    max_epochs=self.parameters["epochs"],  # we want to train this many epochs
                     verbose=1,
                     )
 
@@ -79,22 +82,26 @@ class Trainer():
 
         print "Training..."
         if self.version == 0:
-             self.net.SGD(self.trainDS[:sizes[0]], 100, 10,
+             self.net.SGD(self.trainDS[:sizes[0]], self.parameters["epochs"], 10,
                            eta=self.parameters["n"],
                            test_data=self.testDS[:sizes[1]])
         if self.version == 1:
             t = self.trainDS[:sizes[0]]
-            self.net.SGD(t, 100, 100,
+            self.net.SGD(t, self.parameters["epochs"], 10,
                          eta=self.parameters["n"],
                          lmbda = self.parameters["lmbda"],
                          evaluation_data=self.testDS[:sizes[1]],
-                         monitor_evaluation_accuracy=True)
+                         monitor_evaluation_accuracy=False)
 
         if self.version == 3:
             X1, y1 = zip(*self.trainDS)
             X2, y2 = zip(*self.testDS)
             y2 = [load_data.vectorized_result(y) for y in y2]
             X, y = X1 + X2, y1 + tuple(y2)
+            del X1
+            del X2
+            del y1
+            del y2
             X = np.reshape(X, (len(X), len(X[0])))
             y = np.reshape(y, (len(y), len(y[0])))
             X = X.astype(np.float32)
@@ -121,7 +128,7 @@ class Trainer():
         files = [ f for f in listdir(path_pos) if isfile(join(path_pos, f)) ]
 
 
-        (offsetx, offsety) = (self.size[0]/3, self.size[1]/3)
+        (offsetx, offsety) = (self.size[0]/3, self.size[1]/6)
 
         count = 0;
         datas = []
@@ -137,27 +144,21 @@ class Trainer():
 
                 for y in range(0, imsize[1]-self.size[1], offsety) + list([imsize[1]-self.size[1]]):
 
-                    rect  =(y, y+self.size[1], x, x+self.size[0])
-
+                    rect  =  (x, x+self.size[0], y, y+self.size[1])
 
                     #preprocessing
                     data = self.preprocess.processCrop(join(path_pos, file), rect)
 
-                    data  = np.reshape(data, (len(data), 1))
-
-                    rv = self.net.feedforward(data)
-                    r =  np.argmax(rv)
-
-
+                    (rv, r) = self._predict(data)
                     #
-                    if  r == 1 and rv[r] > 0.95:
-                        print rv[r]
+                    if  r == 1:
+                        if len(rv) == 1: rv = rv[0]
+                        print rv
                         #load_data.show_image(data, size)
                         datas.append(data)
-                        print (x,y,rv[r])
                         #print float(rv[r])
                         rect  =(x, y, x+self.size[0], y+self.size[1])
-                        draw.rectangle(rect, outline=(255,0,0))
+                        draw.rectangle(rect, outline=(int(rv[1] * 255),0,0))
 
 
 
@@ -175,6 +176,36 @@ class Trainer():
         print len(datas)
         return datas
 
+    def _predict(self, data):
+        if self.version < 3:
+            data  = np.reshape(data, (len(data), 1))
+            rv = self.net.feedforward(data)
+            r =  np.argmax(rv)
+
+
+        if self.version == 3:
+            data = np.reshape(data, (1, len(data)))
+            data = data.astype(np.float32)
+            rv = self.net.predict(data)
+            r =  np.argmax(rv)
+            #r =  1 if np.linalg.norm(np.array((0,1)) - rv) < np.linalg.norm(np.array((1,0)) - rv) else 0
+
+
+        return (rv, r)
+
+    def load_net(self, file):
+        if self.version == 3:
+            self.create_net()
+            w = pickle.load(open(file, "rb"))
+            self.net.load_weights_from(w)
+            self.net.initialize()
+
+    def predict(self, file, rect):
+        data = self.preprocess.processCrop(file, rect, newsize=self.size)
+
+        return self._predict(data)
+
+
 
 
     def neg(self):
@@ -184,17 +215,34 @@ class Trainer():
         return [x for x in self.testDS if x[1] == float(1)]
 
     def evalutate(self):
-        print "Positives: %d / %d"%(self.net.evaluate(self.pos()), len(self.pos()))
-        print "Negatives: %d / %d"%(self.net.evaluate(self.neg()), len(self.neg()))
+        if self.version < 3:
+            print "Positives: %d / %d"%(self.net.evaluate(self.pos()), len(self.pos()))
+            print "Negatives: %d / %d"%(self.net.evaluate(self.neg()), len(self.neg()))
+
+
 
     def copy(self, trainer):
         self.net = trainer.net
-        self.trainDS = trainer.trainDS
-        self.testDS = trainer.testDS
+        if trainer.trainDS: self.trainDS = trainer.trainDS
+        if trainer.testDS: self.testDS = trainer.testDS
         self.size = trainer.size
         self.parameters = trainer.parameters
         self.preprocess = trainer.preprocess
         self.version = trainer.version
+
+
+    def save_net(self, file):
+        if self.version == 3:
+            self.net.save_weights_to(file)
+
+    def load_net(self, file):
+        if self.version == 3:
+            net_train = pickle.load(open(file, "rb"))
+            self.create_net()
+            self.net.load_weights_from(net_train)
+            self.net.initialize()
+
+
 
 
 
